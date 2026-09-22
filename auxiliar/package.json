@@ -1,6 +1,6 @@
 {
   "name": "spresenter-importador-auxiliar",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Auxiliar local do Importador de Vídeos para Spresenter",
   "main": "src/main.cjs",
   "author": "Zosma Labs",

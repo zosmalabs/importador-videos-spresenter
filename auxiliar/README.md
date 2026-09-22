@@ -1,6 +1,6 @@
 # Auxiliar do Importador para Spresenter
 
-Aplicativo gratuito que executa em segundo plano e atende ao plugin Importador de Vídeos. Após a instalação, inicia automaticamente com Windows ou macOS e elimina a necessidade de abrir um CMD.
+Aplicativo gratuito que executa em segundo plano e atende ao plugin Importador de Vídeos. Após a instalação, inicia automaticamente com Windows ou macOS e elimina a necessidade de abrir um CMD. Também extrai o áudio de links do YouTube e converte para MP3.
 
 ## Compilar no GitHub
 
@@ -15,6 +15,7 @@ O instalador do macOS é experimental e não assinado. Na primeira abertura, pod
 - Porta local: `127.0.0.1:17843`.
 - Baixa o executável oficial do yt-dlp na primeira inicialização.
 - Localiza o FFmpeg incluído no Spresenter.
+- Converte o áudio do YouTube para MP3 em 128, 192 ou 320 kbps.
 - Guarda downloads temporários na pasta de dados do aplicativo e os apaga após a importação.
 - Não envia vídeos a servidores externos do projeto.
 - Guarda localmente a chave pessoal do Pixabay e mantém as pesquisas em cache por 24 horas.

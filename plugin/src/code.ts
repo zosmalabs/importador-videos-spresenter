@@ -1,14 +1,14 @@
 import type {} from '@spresenter/plugin-sdk/code';
 
-type Destination = 'video' | 'backgroundVideo';
-type UiMessage = { type?: string; destination?: Destination; jobId?: string; title?: string; contentBase64?: string; asset?: { guid: string; title?: string; type?: string; extension?: string } };
+type Destination = 'video' | 'backgroundVideo' | 'audio';
+type UiMessage = { type?: string; destination?: Destination; jobId?: string; title?: string; author?: string; contentBase64?: string; asset?: { guid: string; title?: string; type?: string; extension?: string } };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-function safeFilename(title: string) {
+function safeFilename(title: string, extension: 'mp4' | 'mp3') {
   const clean = title.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  return `${clean || 'video-do-youtube'}.mp4`;
+  return `${clean || (extension === 'mp3' ? 'audio-do-youtube' : 'video-do-youtube')}.${extension}`;
 }
 
 spresenter.ui.onmessage = async (raw: unknown) => {
@@ -19,29 +19,36 @@ spresenter.ui.onmessage = async (raw: unknown) => {
     spresenter.ui.postMessage({ type: 'import-complete', asset: msg.asset, jobId: msg.jobId, nativePackage: true });
     return;
   }
-  if (msg.type === 'import-background' && msg.jobId && msg.title && msg.contentBase64) {
+  if ((msg.type === 'import-background' || msg.type === 'import-audio') && msg.jobId && msg.title && msg.contentBase64) {
     let progressTimer: ReturnType<typeof setInterval> | undefined;
     try {
-      spresenter.ui.postMessage({ type: 'conversion-progress', percent: 4, message: 'Enviando o vídeo ao Spresenter…' });
-      const isBackground = true;
+      const isAudio = msg.type === 'import-audio';
+      spresenter.ui.postMessage({ type: 'conversion-progress', percent: 4, message: isAudio ? 'Enviando o MP3 ao Spresenter…' : 'Enviando o vídeo ao Spresenter…' });
       let conversionPercent = 8;
       progressTimer = setInterval(() => {
         conversionPercent = Math.min(70, conversionPercent + 2);
-        spresenter.ui.postMessage({ type: 'conversion-progress', percent: conversionPercent, message: isBackground ? 'Adicionando aos Fundos…' : 'Convertendo para o formato do Spresenter…' });
+        spresenter.ui.postMessage({ type: 'conversion-progress', percent: conversionPercent, message: isAudio ? 'Adicionando à Trilha…' : 'Adicionando aos Fundos…' });
       }, 1000);
-      const asset = await spresenter.assets.createFile({
-        filename: safeFilename(msg.title), title: msg.title,
-        type: 'backgroundVideo',
-        contentBase64: msg.contentBase64,
-        // Fundos reproduzem o MP4 diretamente. A categoria Vídeos precisa gerar
-        // o pacote interno .scp, incluindo duração, áudio e controles.
-        optimize: false,
-        allowEncode: false,
-      });
+      const asset = isAudio
+        ? await spresenter.assets.createFile({
+            filename: safeFilename(msg.title, 'mp3'),
+            title: msg.title,
+            author: msg.author,
+            contentBase64: msg.contentBase64,
+          })
+        : await spresenter.assets.createFile({
+            filename: safeFilename(msg.title, 'mp4'), title: msg.title,
+            type: 'backgroundVideo',
+            contentBase64: msg.contentBase64,
+            // Fundos reproduzem o MP4 diretamente. A categoria Vídeos precisa gerar
+            // o pacote interno .scp, incluindo duração, áudio e controles.
+            optimize: false,
+            allowEncode: false,
+          });
       clearInterval(progressTimer);
       progressTimer = undefined;
 
-      spresenter.ui.postMessage({ type: 'conversion-progress', percent: 100, message: 'Fundo adicionado.' });
+      spresenter.ui.postMessage({ type: 'conversion-progress', percent: 100, message: isAudio ? 'MP3 adicionado à Trilha.' : 'Fundo adicionado.' });
       spresenter.ui.postMessage({ type: 'import-complete', asset, jobId: msg.jobId });
     } catch (error) {
       if (progressTimer) clearInterval(progressTimer);

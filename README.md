@@ -1,16 +1,18 @@
 # Importador de Vídeos — Zosma Labs
 
-**Pesquise, baixe e importe vídeos para o SPresenter sem sair do fluxo de trabalho.**
+**Pesquise, baixe e importe vídeos ou áudios para o SPresenter sem sair do fluxo de trabalho.**
 
-Plugin gratuito da [Zosma Labs](https://zosma.com.br) para analisar links autorizados, baixar vídeos e importá-los para as categorias **Fundos** ou **Vídeos** do SPresenter. Também permite pesquisar vídeos gratuitos no Pixabay e no Pexels e adicioná-los diretamente aos Fundos.
+Plugin gratuito da [Zosma Labs](https://zosma.com.br) para analisar links autorizados, baixar vídeos ou extrair o áudio em MP3 e importá-los para **Fundos**, **Vídeos** ou **Trilha** no SPresenter. Também permite pesquisar vídeos gratuitos no Pixabay e no Pexels e adicioná-los diretamente aos Fundos.
 
-> **Versão atual: 0.3.3**
+> **Versão em desenvolvimento: 0.4.0** · versão pública estável: 0.3.3
 
 [Baixar a versão mais recente](https://github.com/zosmalabs/importador-videos-spresenter/releases/latest) · [Tutorial](https://youtu.be/kxIf_o-fvas) · [Site da Zosma](https://zosma.com.br)
 
 ## Principais recursos
 
 - Importação por link do YouTube;
+- extração do áudio do YouTube para MP3 em 128, 192 ou 320 kbps;
+- importação automática de MP3 para **Trilha**;
 - pesquisa integrada no Pixabay e no Pexels;
 - importação direta para **Fundos** ou **Vídeos**;
 - seleção de qualidade em HD, Full HD, 4K ou melhor disponível;
@@ -65,7 +67,7 @@ O workflow `.github/workflows/gerar-versao.yml` compila automaticamente o plugin
 
 Para gerar uma versão de teste, use **Actions → Gerar versão → Run workflow**. Os arquivos ficarão disponíveis como artifacts da execução.
 
-Ao publicar uma tag no formato `v0.3.3`, a automação gera a release com:
+Ao publicar uma tag no formato `v0.4.0`, a automação gera a release com:
 
 - ZIP do plugin;
 - instalador EXE do Windows;
