@@ -148,7 +148,7 @@ function run(file, args, timeout = 0) {
   }));
 }
 
-function startVideoDownload(job, args) {
+function startMediaDownload(job, args) {
   const child = spawn(ytdlp, args, { windowsHide: true });
   let stderr = '';
   const inspect = chunk => {
@@ -169,7 +169,7 @@ function startVideoDownload(job, args) {
   child.on('close', code => {
     if (job.status === 'error') return;
     if (code !== 0) return Object.assign(job, { status: 'error', error: stderr.trim() || `yt-dlp terminou com código ${code}.` });
-    if (!fs.existsSync(job.file)) return Object.assign(job, { status: 'error', error: 'O MP4 não foi encontrado após o download.' });
+    if (!fs.existsSync(job.file)) return Object.assign(job, { status: 'error', error: `O ${job.mediaType === 'audio' ? 'MP3' : 'MP4'} não foi encontrado após o download.` });
     Object.assign(job, { status: 'ready', percent: 100, speed: '', eta: '' });
   });
 }
@@ -455,15 +455,23 @@ async function handler(req, res) {
       ffmpeg = findFfmpeg();
       if (!ffmpeg) throw new Error('FFmpeg do Spresenter não foi localizado. Abra o Spresenter e tente novamente.');
       const id = `${Date.now()}${Math.random().toString(16).slice(2)}`;
-      const output = path.join(downloadsDir(), `${id}.mp4`);
       const template = path.join(downloadsDir(), `${id}.%(ext)s`);
+      const isAudio = body.mediaType === 'audio';
+      const output = path.join(downloadsDir(), `${id}.${isAudio ? 'mp3' : 'mp4'}`);
+      if (isAudio) {
+        const bitrate = ['128', '192', '320'].includes(String(body.audioQuality)) ? String(body.audioQuality) : '192';
+        const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '', mediaType: 'audio' };
+        jobs.set(id, job);
+        startMediaDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', `${bitrate}K`, '-o', template, '--', body.url]);
+        return json(res, 202, { jobId: id, status: job.status, percent: job.percent, mediaType: job.mediaType });
+      }
       const format = body.quality === 'light'
         ? 'bv*[height<=360][vcodec^=avc1]+ba[ext=m4a]/b[height<=360][vcodec^=avc1][acodec^=mp4a]'
         : 'bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][vcodec^=avc1][acodec^=mp4a]';
-      const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '' };
+      const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '', mediaType: 'video' };
       jobs.set(id, job);
-      startVideoDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', format, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', template, '--', body.url]);
-      return json(res, 202, { jobId: id, status: job.status, percent: job.percent });
+      startMediaDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', format, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', template, '--', body.url]);
+      return json(res, 202, { jobId: id, status: job.status, percent: job.percent, mediaType: job.mediaType });
     }
     const jobMatch = url.pathname.match(/^\/jobs\/([a-f0-9]+)$/);
     if (req.method === 'GET' && jobMatch) {
