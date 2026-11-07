@@ -9,6 +9,9 @@ const { execFile, spawn } = require('child_process');
 const PORT = 17843;
 const PIXABAY_CACHE_MAX_AGE = 24 * 60 * 60 * 1000;
 const PEXELS_CACHE_MAX_AGE = 24 * 60 * 60 * 1000;
+const BACKGROUND_IMPORT_LIMIT = 2 ** 31;
+const MEDIA_METADATA = ['--no-simulate', '--no-quiet', '--progress',
+  '--print', 'after_move:SPRESENTER_MEDIA:%(vcodec)s %(acodec)s %(duration)s %(ext)s'];
 let tray;
 let server;
 let ready = false;
@@ -148,6 +151,44 @@ function run(file, args, timeout = 0) {
   }));
 }
 
+function prepareMedia(ffmpegPath, args, job, duration) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegPath, ['-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', ...args], { windowsHide: true });
+    let stderr = '';
+    let pending = '';
+    let processed = 0;
+    let stalled = false;
+    const timeout = setTimeout(() => {
+      stalled = true;
+      child.kill();
+    }, 3 * 60 * 1000);
+    child.stdout.on('data', chunk => {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('out_time_us=')) continue;
+        const seconds = Number(line.slice('out_time_us='.length)) / 1e6;
+        if (!Number.isFinite(seconds) || seconds <= processed) continue;
+        processed = seconds;
+        timeout.refresh();
+        if (duration > 0) job.processingPercent = Math.min(99, Math.floor(100 * seconds / duration));
+      }
+    });
+    child.stderr.on('data', chunk => { stderr = `${stderr}${chunk}`.slice(-16000); });
+    child.once('error', error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('close', code => {
+      clearTimeout(timeout);
+      if (stalled) return reject(new Error('O FFmpeg ficou três minutos sem avançar no processamento do arquivo.'));
+      if (code !== 0) return reject(new Error(stderr.trim() || `O FFmpeg terminou com código ${code}.`));
+      resolve();
+    });
+  });
+}
+
 function startMediaDownload(job, args, convert) {
   const child = spawn(ytdlp, args, { windowsHide: true });
   let stderr = '';
@@ -178,14 +219,14 @@ function startMediaDownload(job, args, convert) {
     if (code !== 0) return Object.assign(job, { status: 'error', error: stderr.trim() || `yt-dlp terminou com código ${code}.` });
     if (convert) {
       try {
-        const codecs = stdout.match(/^SPRESENTER_CODECS:(\S+) (\S+)\s*$/m);
-        await convert(codecs?.[1], codecs?.[2]);
+        const media = stdout.match(/^SPRESENTER_MEDIA:(\S+) (\S+) (\S+) (\S+)\s*$/m);
+        await convert(media?.[1], media?.[2], Number(media?.[3]), media?.[4]);
       } catch (error) {
         return Object.assign(job, { status: 'error', error: error.message });
       }
     }
     if (!fs.existsSync(job.file)) return Object.assign(job, { status: 'error', error: `O ${job.mediaType === 'audio' ? 'MP3' : 'MP4'} não foi encontrado após o download.` });
-    Object.assign(job, { status: 'ready', percent: 100, speed: '', eta: '', processing: undefined });
+    Object.assign(job, { status: 'ready', percent: 100, speed: '', eta: '', processing: undefined, processingPercent: undefined });
   });
 }
 
@@ -478,13 +519,30 @@ async function handler(req, res) {
       if (!ffmpeg) throw new Error('FFmpeg do Spresenter não foi localizado. Abra o Spresenter e tente novamente.');
       const id = `${Date.now()}${Math.random().toString(16).slice(2)}`;
       const template = path.join(downloadsDir(), `${id}.%(ext)s`);
+      const sourceTemplate = path.join(downloadsDir(), `${id}.source.%(ext)s`);
       const isAudio = body.mediaType === 'audio';
       const output = path.join(downloadsDir(), `${id}.${isAudio ? 'mp3' : 'mp4'}`);
+      const ffmpegPath = ffmpeg;
+      const args = ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpegPath];
       if (isAudio) {
         const bitrate = ['128', '192', '320'].includes(String(body.audioQuality)) ? String(body.audioQuality) : '192';
         const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '', mediaType: 'audio' };
         jobs.set(id, job);
-        startMediaDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', `${bitrate}K`, '-o', template, '--', body.url]);
+        startMediaDownload(job, [...args, ...MEDIA_METADATA, '-f', 'bestaudio/best', '-o', sourceTemplate, '--', body.url], async (_videoCodec, _audioCodec, duration, extension) => {
+          if (!extension || !/^[a-z0-9]+$/i.test(extension)) {
+            throw new Error('O yt-dlp não informou o formato do áudio baixado.');
+          }
+          const source = path.join(downloadsDir(), `${id}.source.${extension}`);
+          job.processing = 'Convertendo o áudio para MP3…';
+          try {
+            await prepareMedia(ffmpegPath, ['-i', source, '-map', '0:a:0', '-c:a', 'libmp3lame', '-b:a', `${bitrate}k`, output], job, duration);
+          } catch (error) {
+            fs.rmSync(output, { force: true });
+            throw error;
+          } finally {
+            fs.rmSync(source, { force: true });
+          }
+        });
         return json(res, 202, { jobId: id, status: job.status, percent: job.percent, mediaType: job.mediaType });
       }
       const height = body.quality;
@@ -494,30 +552,34 @@ async function handler(req, res) {
         : 'bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][vcodec^=avc1][acodec^=mp4a]';
       const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '', mediaType: 'video' };
       jobs.set(id, job);
-      const ffmpegPath = ffmpeg;
-      const args = ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpegPath];
       if (highResolution) {
-        const sourceTemplate = path.join(downloadsDir(), `${id}.source.%(ext)s`);
         const source = path.join(downloadsDir(), `${id}.source.mkv`);
         const exact = `[height=${height}]`;
-        const highFormat = `bv${exact}[vcodec^=avc1]+ba[acodec^=mp4a]/b${exact}[vcodec^=avc1][acodec^=mp4a]/bv${exact}+ba/b${exact}`;
-        const highArgs = [...args, '--no-simulate', '--no-quiet', '--progress',
-          '--print', 'after_move:SPRESENTER_CODECS:%(vcodec)s %(acodec)s',
+        const isBackground = body.destination === 'backgroundVideo';
+        const canUseModernVideo = isBackground || body.destination === 'video';
+        const compact4k = canUseModernVideo && height >= 2160 ? `bv${exact}[vcodec^=av01]+ba/` : '';
+        const highFormat = `${compact4k}bv${exact}[vcodec^=avc1]+ba[acodec^=mp4a]/b${exact}[vcodec^=avc1][acodec^=mp4a]/bv${exact}[vcodec^=vp9]+ba/bv${exact}+ba/b${exact}`;
+        const highArgs = [...args, ...MEDIA_METADATA,
           '-f', highFormat, '--merge-output-format', 'mkv', '--remux-video', 'mkv',
           '-o', sourceTemplate, '--', body.url];
-        startMediaDownload(job, highArgs, async (videoCodec, audioCodec) => {
-          const videoArgs = videoCodec?.startsWith('avc1')
+        startMediaDownload(job, highArgs, async (videoCodec, audioCodec, duration) => {
+          const canCopyVideo = videoCodec?.startsWith('avc1') ||
+            (canUseModernVideo && /^(vp9|vp09|av01)(\.|$)/.test(videoCodec || ''));
+          const videoArgs = canCopyVideo
             ? ['-c:v', 'copy']
-            : ['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p'];
+            : ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p'];
           const audioArgs = ['-c:a', audioCodec?.startsWith('mp4a') ? 'copy' : 'aac'];
-          job.processing = videoArgs[1] === 'copy' ? 'Preparando o MP4…' : 'Convertendo o vídeo para MP4…';
+          job.processing = canCopyVideo ? 'Preparando o MP4…' : 'Convertendo o vídeo para MP4…';
           try {
-            await run(ffmpegPath, ['-nostdin', '-loglevel', 'error', '-i', source, ...videoArgs, ...audioArgs, '-movflags', '+faststart', output]);
+            await prepareMedia(ffmpegPath, ['-i', source, ...videoArgs, ...audioArgs, output], job, duration);
           } catch (error) {
             fs.rmSync(output, { force: true });
             throw error;
           } finally {
             fs.rmSync(source, { force: true });
+          }
+          if (isBackground && fs.statSync(output).size >= BACKGROUND_IMPORT_LIMIT) {
+            throw new Error('O MP4 ultrapassou 2 GiB e pode travar na transferência para Fundos. Tente importar em 1440p ou em uma resolução menor.');
           }
         });
       } else {
@@ -529,7 +591,7 @@ async function handler(req, res) {
     if (req.method === 'GET' && jobMatch) {
       const job = jobs.get(jobMatch[1]);
       if (!job) return json(res, 404, { error: 'Download não encontrado.' });
-      return json(res, 200, { id: job.id, status: job.status, percent: job.percent, processing: job.processing, speed: job.speed, eta: job.eta, error: job.error });
+      return json(res, 200, { id: job.id, status: job.status, percent: job.percent, processing: job.processing, processingPercent: job.processingPercent, speed: job.speed, eta: job.eta, error: job.error, importPercent: job.importPercent, importStatus: job.importStatus });
     }
     const base64Match = url.pathname.match(/^\/base64\/([a-f0-9]+)$/);
     if (req.method === 'GET' && base64Match) {

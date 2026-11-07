@@ -4,7 +4,7 @@ import { Root, Header, Panel, Row, Stack, Field, TextInput, Select, Button, Stat
 
 type VideoInfo = { title: string; uploader?: string; thumbnail?: string; duration?: number; resolutions?: number[]; analyzedUrl?: string };
 type YoutubeQuality = 'compatible' | 'light' | number;
-type Job = { id: string; status: 'downloading' | 'ready' | 'error'; percent?: number; processing?: string; speed?: string; eta?: string; error?: string; importPercent?: number; importStatus?: string };
+type Job = { id: string; status: 'downloading' | 'ready' | 'error'; percent?: number; processing?: string; processingPercent?: number; speed?: string; eta?: string; error?: string; importPercent?: number; importStatus?: string };
 type Asset = { guid: string; title?: string; type?: string };
 type PixabayVariant = { name: string; url: string; width: number; height: number; size: number; thumbnail: string };
 type PixabayVideo = { id: number; pageURL: string; tags: string; duration: number; user: string; variants: PixabayVariant[] };
@@ -12,10 +12,17 @@ type PexelsVideo = { id: number; title: string; pageURL: string; thumbnail: stri
 type Resolution = '720' | '1080' | '2160' | 'best';
 const HELPER = 'http://127.0.0.1:17843';
 
+function helperErrorMessage(message: string) {
+  if (/sign in to confirm you.{0,4}re not a bot/i.test(message)) {
+    return 'O YouTube exigiu verificação para acessar este vídeo. Abra o link no navegador e tente analisar novamente depois.';
+  }
+  return message;
+}
+
 async function helperRequest(path: string, method = 'GET', payload?: unknown) {
   const response = await fetch(`${HELPER}${path}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'text/plain;charset=UTF-8' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
+  if (!response.ok) throw new Error(helperErrorMessage(data.error || `Erro HTTP ${response.status}`));
   return data;
 }
 
@@ -93,7 +100,7 @@ export function App() {
     const timer = window.setInterval(() => helperRequest(`/jobs/${encodeURIComponent(job.id)}`).then((next) => {
       if (next.status === 'error') {
         setJob(null);
-        setError(next.error || 'O download falhou.');
+        setError(helperErrorMessage(next.error || 'O download falhou.'));
         return;
       }
       setJob(next);
@@ -149,7 +156,7 @@ export function App() {
     if (!info?.analyzedUrl || info.analyzedUrl !== url.trim()) return; resetProgress(); setMessage('Iniciando o download… mantenha o auxiliar aberto.');
     try {
       const isAudio = destination === 'audio';
-      const next = await helperRequest('/download', 'POST', { url: info.analyzedUrl, quality, mediaType: isAudio ? 'audio' : 'video', audioQuality });
+      const next = await helperRequest('/download', 'POST', { url: info.analyzedUrl, quality, destination, mediaType: isAudio ? 'audio' : 'video', audioQuality });
       setJob({ id: next.jobId, status: next.status || 'downloading', percent: next.percent || 0 });
       setMessage(isAudio ? 'Baixando e convertendo o áudio para MP3…' : 'Baixando o vídeo…');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -226,6 +233,10 @@ export function App() {
       {!!pexelsItems.length && <Panel label={`${pexelsTotal} resultados encontrados`}><Row className="results-toolbar"><span>{pexelsItems.length} vídeos nesta página</span><label>Colunas <Select value={gridColumns} onChange={(e) => setGridColumns(Number(e.target.value) as 2 | 3 | 4 | 5)}><option value={2}>2</option><option value={3}>3</option><option value={4}>4</option><option value={5}>5</option></Select></label></Row><div className={`pixabay-grid columns-${gridColumns}`}>{pexelsItems.map((item) => { const variant = item.variants[0]; return <article className="pixabay-card" key={item.id}><img src={item.thumbnail} alt={`Prévia do vídeo de ${item.user}`} /><div className="pixabay-card-body"><strong>{pexelsTitle(item)}</strong><span>Vídeo de <button className="author-link" onClick={() => openProvider(item.userURL)}>{item.user}</button> no Pexels</span><span>{variant.width}×{variant.height} · {formatDuration(item.duration)}</span><Button size="sm" variant="success" disabled={busy} onClick={() => importPexels(item)}>Adicionar aos Fundos</Button><button className="card-link" onClick={() => openProvider(item.pageURL)}>Ver no Pexels</button></div></article>; })}</div><Row className="pagination"><Button size="sm" disabled={pexelsPage <= 1 || busy} onClick={() => searchPexels(pexelsPage - 1)}>Anterior</Button><span>Página {pexelsPage}</span><Button size="sm" disabled={pexelsPage * 12 >= pexelsTotal || busy} onClick={() => searchPexels(pexelsPage + 1)}>Próxima</Button></Row></Panel>}
     </>}
 
-    {(job || message || error || imported) && <Panel label="Andamento">{job?.status === 'downloading' && !job.processing && <><p className="phase-label">1 de 2 · Download</p><div className="progress"><div style={{ width: `${Math.max(2, Math.min(100, job.percent || 0))}%` }} /></div><Row className="progress-label"><strong>{Math.round(job.percent || 0)}%</strong><span>{[job.speed, job.eta && `Restante: ${job.eta}`].filter(Boolean).join(' · ')}</span></Row></>}{conversionPercent !== null && !imported && <><p className="phase-label">2 de 2 · Processamento no Spresenter</p><div className="progress conversion"><div style={{ width: `${Math.max(2, Math.min(100, conversionPercent))}%` }} /></div><Row className="progress-label"><strong>{Math.round(conversionPercent)}%</strong><span>{destination === 'video' ? 'Gerando o pacote .scp' : destination === 'audio' ? 'Adicionando à Trilha' : 'Adicionando aos Fundos'}</span></Row></>}{error ? <StatusIndicator state="error" label="Não foi possível concluir" detail={error} /> : <StatusIndicator state={imported ? 'ok' : 'warn'} label={imported ? 'Importação concluída' : job?.processing || message || 'Processando…'} detail={imported?.title} />}</Panel>}
+    {(job || message || error || imported) && <Panel label="Andamento">{job?.status === 'downloading' && !job.processing && <><p className="phase-label">1 de 2 · Download</p><div className="progress"><div style={{ width: `${Math.max(2, Math.min(100, job.percent || 0))}%` }} /></div><Row className="progress-label"><strong>{Math.round(job.percent || 0)}%</strong><span>{[job.speed, job.eta && `Restante: ${job.eta}`].filter(Boolean).join(' · ')}</span></Row></>}{job?.processingPercent !== undefined && <>
+      <p className="phase-label">{destination === 'audio' ? 'Preparação do MP3' : 'Preparação do MP4'}</p>
+      <div className="progress conversion"><div style={{ width: `${job.processingPercent}%` }} /></div>
+      <Row className="progress-label"><strong>{job.processingPercent}%</strong></Row>
+    </>}{conversionPercent !== null && !imported && <><p className="phase-label">2 de 2 · Processamento no Spresenter</p><div className="progress conversion"><div style={{ width: `${Math.max(2, Math.min(100, conversionPercent))}%` }} /></div><Row className="progress-label"><strong>{Math.round(conversionPercent)}%</strong><span>{destination === 'video' ? 'Gerando o pacote .scp' : destination === 'audio' ? 'Adicionando à Trilha' : 'Adicionando aos Fundos'}</span></Row></>}{error ? <StatusIndicator state="error" label="Não foi possível concluir" detail={error} /> : <StatusIndicator state={imported ? 'ok' : 'warn'} label={imported ? 'Importação concluída' : job?.processing || message || 'Processando…'} detail={imported?.title} />}</Panel>}
   </Root>;
 }
