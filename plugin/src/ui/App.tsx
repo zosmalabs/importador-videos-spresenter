@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { postMessage, onMessage } from '@spresenter/plugin-sdk/ui';
 import { Root, Header, Panel, Row, Stack, Field, TextInput, Select, Button, StatusIndicator } from '@spresenter/plugin-sdk/ui-kit/react';
 
-type VideoInfo = { title: string; uploader?: string; thumbnail?: string; duration?: number };
-type Job = { id: string; status: 'downloading' | 'ready' | 'error'; percent?: number; speed?: string; eta?: string; error?: string; importPercent?: number; importStatus?: string };
+type VideoInfo = { title: string; uploader?: string; thumbnail?: string; duration?: number; resolutions?: number[]; analyzedUrl?: string };
+type YoutubeQuality = 'compatible' | 'light' | number;
+type Job = { id: string; status: 'downloading' | 'ready' | 'error'; percent?: number; processing?: string; speed?: string; eta?: string; error?: string; importPercent?: number; importStatus?: string };
 type Asset = { guid: string; title?: string; type?: string };
 type PixabayVariant = { name: string; url: string; width: number; height: number; size: number; thumbnail: string };
 type PixabayVideo = { id: number; pageURL: string; tags: string; duration: number; user: string; variants: PixabayVariant[] };
@@ -31,13 +32,12 @@ export function App() {
   const [mode, setMode] = useState<'youtube' | 'pixabay' | 'pexels'>('youtube');
   const [url, setUrl] = useState('');
   const [helperOnline, setHelperOnline] = useState<boolean | null>(null);
-  const [helperVersion, setHelperVersion] = useState('');
   const [ffmpegFound, setFfmpegFound] = useState(false);
   const [helperError, setHelperError] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [info, setInfo] = useState<VideoInfo | null>(null);
   const [destination, setDestination] = useState<'backgroundVideo' | 'video' | 'audio'>('backgroundVideo');
-  const [quality, setQuality] = useState<'compatible' | 'light'>('compatible');
+  const [quality, setQuality] = useState<YoutubeQuality>('compatible');
   const [audioQuality, setAudioQuality] = useState<'128' | '192' | '320'>('192');
   const [job, setJob] = useState<Job | null>(null);
   const [message, setMessage] = useState('');
@@ -67,7 +67,7 @@ export function App() {
   const [gridColumns, setGridColumns] = useState<2 | 3 | 4 | 5>(3);
 
   const applyHealth = (data: any) => {
-    setHelperOnline(!!data.ok); setHelperVersion(data.ytDlpVersion || ''); setFfmpegFound(!!data.ffmpegFound);
+    setHelperOnline(!!data.ok); setFfmpegFound(!!data.ffmpegFound);
     setHelperError(data.ok ? '' : data.error || 'O auxiliar ainda não terminou de iniciar.');
   };
   useEffect(() => {
@@ -83,6 +83,7 @@ export function App() {
       }
       if (msg.type === 'import-error') {
         if (msg.jobId) helperRequest(`/cleanup/${encodeURIComponent(msg.jobId)}`, 'POST', {}).catch(() => {});
+        setConversionPercent(null);
         setError(msg.error || 'Falha ao importar no Spresenter.'); setJob(null);
       }
     });
@@ -90,7 +91,13 @@ export function App() {
   useEffect(() => {
     if (!job || job.status !== 'downloading') return;
     const timer = window.setInterval(() => helperRequest(`/jobs/${encodeURIComponent(job.id)}`).then((next) => {
-      setJob(next); if (next.status === 'error') setError(next.error || 'O download falhou.'); if (next.status === 'ready') setMessage('Download concluído. Preparando a importação…');
+      if (next.status === 'error') {
+        setJob(null);
+        setError(next.error || 'O download falhou.');
+        return;
+      }
+      setJob(next);
+      if (next.status === 'ready') setMessage('Download concluído. Preparando a importação…');
     }).catch((e) => setError(e.message)), 1000);
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
@@ -99,7 +106,6 @@ export function App() {
     let cancelled = false;
     const finish = async () => {
       try {
-        setConversionPercent(8);
         if (destination === 'video') {
           setMessage('Criando o pacote nativo do Spresenter…'); setConversionPercent(5);
           const timer = window.setInterval(() => helperRequest(`/jobs/${encodeURIComponent(job.id)}`).then((current) => {
@@ -109,13 +115,18 @@ export function App() {
           finally { window.clearInterval(timer); }
           return;
         }
-        const isAudio = destination === 'audio';
-        setMessage(isAudio ? 'Transferindo o MP3 para o Spresenter…' : 'Transferindo o fundo para o Spresenter…');
+        if (destination === 'backgroundVideo') {
+          setMessage('Transferindo o fundo para o Spresenter…');
+          postMessage({ type: 'import-background', jobId: job.id, title: info.title });
+          return;
+        }
+        setConversionPercent(8);
+        setMessage('Transferindo o MP3 para o Spresenter…');
         const response = await fetch(`${HELPER}/base64/${encodeURIComponent(job.id)}`);
-        if (!response.ok) throw new Error(`Erro HTTP ${response.status} ao ler o ${isAudio ? 'MP3' : 'MP4'}.`);
+        if (!response.ok) throw new Error(`Erro HTTP ${response.status} ao ler o MP3.`);
         const contentBase64 = await response.text();
-        if (!cancelled) postMessage({ type: isAudio ? 'import-audio' : 'import-background', jobId: job.id, title: info.title, author: info.uploader, contentBase64 });
-      } catch (e) { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setJob(null); } }
+        if (!cancelled) postMessage({ type: 'import-audio', jobId: job.id, title: info.title, author: info.uploader, contentBase64 });
+      } catch (e) { if (!cancelled) { setConversionPercent(null); setError(e instanceof Error ? e.message : String(e)); setJob(null); } }
     };
     void finish(); return () => { cancelled = true; };
   }, [job?.status]);
@@ -124,14 +135,21 @@ export function App() {
   const resetProgress = () => { setError(''); setImported(null); setJob(null); setConversionPercent(null); setMessage(''); };
   const checkHelper = async () => { setHelperOnline(null); setHelperError(''); try { applyHealth(await helperRequest('/health')); } catch (e) { setHelperOnline(false); setHelperError(e instanceof Error ? e.message : String(e)); } };
   const analyze = async () => {
+    const analyzedUrl = url.trim();
+    setQuality('compatible');
     setAnalyzing(true); setInfo(null); resetProgress(); setMessage('Analisando…');
-    try { setInfo(await helperRequest('/analyze', 'POST', { url: url.trim() })); setHelperOnline(true); setMessage(''); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setAnalyzing(false); }
+    try {
+      const result = await helperRequest('/analyze', 'POST', { url: analyzedUrl });
+      setInfo({ ...result, analyzedUrl });
+      setHelperOnline(true);
+      setMessage('');
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setAnalyzing(false); }
   };
   const downloadYoutube = async () => {
-    if (!info) return; resetProgress(); setMessage('Iniciando o download… mantenha o auxiliar aberto.');
+    if (!info?.analyzedUrl || info.analyzedUrl !== url.trim()) return; resetProgress(); setMessage('Iniciando o download… mantenha o auxiliar aberto.');
     try {
       const isAudio = destination === 'audio';
-      const next = await helperRequest('/download', 'POST', { url: url.trim(), quality, mediaType: isAudio ? 'audio' : 'video', audioQuality });
+      const next = await helperRequest('/download', 'POST', { url: info.analyzedUrl, quality, mediaType: isAudio ? 'audio' : 'video', audioQuality });
       setJob({ id: next.jobId, status: next.status || 'downloading', percent: next.percent || 0 });
       setMessage(isAudio ? 'Baixando e convertendo o áudio para MP3…' : 'Baixando o vídeo…');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -183,12 +201,19 @@ export function App() {
   const busy = !!job || analyzing || pixabaySearching || pexelsSearching || savingKey;
   return <Root>
     <Header title="Importador de Vídeos" subtitle="Importe vídeos ou áudios por link e encontre fundos gratuitos para sua projeção." />
-    <Panel label="Auxiliar local"><Row style={{ alignItems: 'center' }}><div style={{ flex: 1 }}><StatusIndicator state={helperOnline && ffmpegFound ? 'ok' : helperOnline === false ? 'error' : 'warn'} label={helperOnline ? 'Auxiliar conectado' : helperOnline === false ? 'Auxiliar desconectado' : 'Verificando…'} detail={helperOnline && helperVersion ? `yt-dlp ${helperVersion} · ${ffmpegFound ? 'FFmpeg pronto' : 'FFmpeg não localizado'}` : undefined} /></div><Button size="sm" onClick={checkHelper}>Verificar</Button></Row>{helperOnline === false && <p className="hint">Instale e abra o <strong>Auxiliar do Importador para Spresenter</strong>.</p>}{helperError && <p className="error-detail">{helperError}</p>}</Panel>
+    <Panel label="Auxiliar local"><Row style={{ alignItems: 'center' }}><div style={{ flex: 1 }}><StatusIndicator state={helperOnline && ffmpegFound ? 'ok' : helperOnline === false ? 'error' : 'warn'} label={helperOnline ? 'Auxiliar conectado' : helperOnline === false ? 'Auxiliar desconectado' : 'Verificando…'} /></div><Button size="sm" onClick={checkHelper}>Verificar</Button></Row>{helperOnline === false && <p className="hint">Instale e abra o <strong>Auxiliar do Importador para Spresenter</strong>.</p>}{helperError && <p className="error-detail">{helperError}</p>}</Panel>
     <div className="source-tabs"><button disabled={busy} className={mode === 'youtube' ? 'active' : ''} onClick={() => { setMode('youtube'); resetProgress(); }}>Link do YouTube</button><button disabled={busy} className={mode === 'pixabay' ? 'active' : ''} onClick={() => { setMode('pixabay'); resetProgress(); }}>Pesquisar no Pixabay</button><button disabled={busy} className={mode === 'pexels' ? 'active' : ''} onClick={() => { setMode('pexels'); resetProgress(); }}>Pesquisar no Pexels</button></div>
 
     {mode === 'youtube' ? <>
       <Panel label="Link do YouTube"><Stack><Field label="URL do vídeo" hint={!url || validUrl ? '' : 'Informe um endereço do YouTube ou youtu.be.'}><TextInput value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && validUrl && helperOnline && analyze()} placeholder="https://www.youtube.com/watch?v=…" /></Field><Button variant="primary" disabled={!validUrl || busy} onClick={analyze}>{analyzing ? 'Analisando…' : 'Analisar vídeo'}</Button></Stack></Panel>
-      {info && !job && !imported && <Panel label="Conteúdo encontrado"><div className="video-card">{info.thumbnail && <img src={info.thumbnail} alt="Miniatura" />}<div className="video-meta"><strong>{info.title}</strong><span>{[info.uploader, formatDuration(info.duration)].filter(Boolean).join(' · ')}</span></div></div><Row style={{ marginTop: 12 }}><Field label="Importar para"><Select value={destination} onChange={(e) => setDestination(e.target.value as any)}><option value="backgroundVideo">Fundos (vídeo)</option><option value="video">Vídeos</option><option value="audio">Trilha (MP3)</option></Select></Field>{destination === 'audio' ? <Field label="Qualidade do MP3"><Select value={audioQuality} onChange={(e) => setAudioQuality(e.target.value as any)}><option value="128">Econômica · 128 kbps</option><option value="192">Padrão · 192 kbps</option><option value="320">Alta · 320 kbps</option></Select></Field> : <Field label="Qualidade do vídeo"><Select value={quality} onChange={(e) => setQuality(e.target.value as any)}><option value="compatible">Melhor compatível (até 720p)</option><option value="light">Leve (até 360p)</option></Select></Field>}</Row><Button variant="success" onClick={downloadYoutube}>{destination === 'audio' ? 'Baixar MP3 e adicionar à Trilha' : 'Baixar e importar'}</Button></Panel>}
+      {info && info.analyzedUrl === url.trim() && !job && !imported && <Panel label="Conteúdo encontrado"><div className="video-card">{info.thumbnail && <img src={info.thumbnail} alt="Miniatura" />}<div className="video-meta"><strong>{info.title}</strong><span>{[info.uploader, formatDuration(info.duration)].filter(Boolean).join(' · ')}</span></div></div><Row style={{ marginTop: 12 }}><Field label="Importar para"><Select value={destination} onChange={(e) => setDestination(e.target.value as any)}><option value="backgroundVideo">Fundos (vídeo)</option><option value="video">Vídeos</option><option value="audio">Trilha (MP3)</option></Select></Field>{destination === 'audio' ? <Field label="Qualidade do MP3"><Select value={audioQuality} onChange={(e) => setAudioQuality(e.target.value as any)}><option value="128">Econômica · 128 kbps</option><option value="192">Padrão · 192 kbps</option><option value="320">Alta · 320 kbps</option></Select></Field> : <Field label="Qualidade do vídeo"><Select value={quality} onChange={(e) => {
+        const value = e.target.value;
+        setQuality(value === 'compatible' || value === 'light' ? value : Number(value));
+      }}>
+        {info.resolutions?.map(height => <option key={height} value={height}>{height === 2160 ? '4K · ' : ''}{height}p</option>)}
+        <option value="compatible">HD · até 720p</option>
+        <option value="light">Leve (até 360p)</option>
+      </Select></Field>}</Row><Button variant="success" onClick={downloadYoutube}>{destination === 'audio' ? 'Baixar MP3 e adicionar à Trilha' : 'Baixar e importar'}</Button></Panel>}
     </> : mode === 'pixabay' ? <>
       {pixabayConfigured === false && <Panel label="Conectar ao Pixabay"><Stack><p className="hint pixabay-intro">Use gratuitamente sua chave pessoal da API. Ela será guardada somente neste computador.</p><Field label="Chave da API" hint="Encontre sua chave em pixabay.com/api/docs"><TextInput type="password" value={pixabayKey} onChange={(e) => setPixabayKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pixabayKey.trim() && !savingKey && savePixabayKey()} placeholder="Cole sua chave do Pixabay" /></Field><Row><Button variant="primary" disabled={!pixabayKey.trim() || savingKey} onClick={savePixabayKey}>{savingKey ? 'Verificando…' : 'Salvar chave'}</Button><button className="external-link" type="button" onClick={() => openPixabay('https://pixabay.com/api/docs/')}>Obter chave gratuita</button></Row></Stack></Panel>}
       {pixabayConfigured && <Panel label="Fundos gratuitos do Pixabay"><Stack><Row className="search-row"><div style={{ flex: 1 }}><TextInput value={pixabayQuery} onChange={(e) => setPixabayQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pixabayQuery.trim() && searchPixabay(1)} placeholder="Ex.: natureza, céu, partículas, igreja…" /></div><Select value={pixabayResolution} onChange={(e) => { setPixabayResolution(e.target.value as Resolution); setPixabayItems([]); setPixabayHasSearched(false); }}><option value="720">HD · 720p</option><option value="1080">Full HD · 1080p</option><option value="2160">4K · 2160p</option><option value="best">Melhor disponível</option></Select><Button variant="primary" disabled={!pixabayQuery.trim() || busy} onClick={() => searchPixabay(1)}>{pixabaySearching ? 'Pesquisando…' : 'Pesquisar'}</Button></Row><p className="hint search-tip">Somente vídeos horizontais na resolução selecionada.</p><div className="license-notice"><strong>Conteúdo gratuito do Pixabay</strong><span>Permitido para projeções e apresentações. Não revenda ou redistribua o vídeo isoladamente.</span><button className="inline-link" onClick={() => setLicenseExpanded((value) => !value)}>{licenseExpanded ? 'Ocultar informações' : 'Entenda como pode usar'}</button>{licenseExpanded && <div className="license-details"><p>Você pode usar, editar e adaptar os vídeos gratuitamente. O crédito ao autor não é obrigatório, mas é apreciado.</p><p>Conteúdos com pessoas, marcas ou logotipos reconhecíveis podem exigir cuidados adicionais. Não use o conteúdo de forma enganosa, ilegal ou como uma marca própria.</p><button className="inline-link" onClick={() => openPixabay('https://pixabay.com/service/license-summary/')}>Ver licença completa do Pixabay</button></div>}</div><Row className="pixabay-credit"><span>Vídeos fornecidos por <button className="inline-link" onClick={() => openPixabay('https://pixabay.com/')}>Pixabay</button> · conteúdo seguro</span><button className="link-button" onClick={changePixabayKey}>Trocar chave</button></Row></Stack></Panel>}
@@ -201,6 +226,6 @@ export function App() {
       {!!pexelsItems.length && <Panel label={`${pexelsTotal} resultados encontrados`}><Row className="results-toolbar"><span>{pexelsItems.length} vídeos nesta página</span><label>Colunas <Select value={gridColumns} onChange={(e) => setGridColumns(Number(e.target.value) as 2 | 3 | 4 | 5)}><option value={2}>2</option><option value={3}>3</option><option value={4}>4</option><option value={5}>5</option></Select></label></Row><div className={`pixabay-grid columns-${gridColumns}`}>{pexelsItems.map((item) => { const variant = item.variants[0]; return <article className="pixabay-card" key={item.id}><img src={item.thumbnail} alt={`Prévia do vídeo de ${item.user}`} /><div className="pixabay-card-body"><strong>{pexelsTitle(item)}</strong><span>Vídeo de <button className="author-link" onClick={() => openProvider(item.userURL)}>{item.user}</button> no Pexels</span><span>{variant.width}×{variant.height} · {formatDuration(item.duration)}</span><Button size="sm" variant="success" disabled={busy} onClick={() => importPexels(item)}>Adicionar aos Fundos</Button><button className="card-link" onClick={() => openProvider(item.pageURL)}>Ver no Pexels</button></div></article>; })}</div><Row className="pagination"><Button size="sm" disabled={pexelsPage <= 1 || busy} onClick={() => searchPexels(pexelsPage - 1)}>Anterior</Button><span>Página {pexelsPage}</span><Button size="sm" disabled={pexelsPage * 12 >= pexelsTotal || busy} onClick={() => searchPexels(pexelsPage + 1)}>Próxima</Button></Row></Panel>}
     </>}
 
-    {(job || message || error || imported) && <Panel label="Andamento">{job?.status === 'downloading' && <><p className="phase-label">1 de 2 · Download</p><div className="progress"><div style={{ width: `${Math.max(2, Math.min(100, job.percent || 0))}%` }} /></div><Row className="progress-label"><strong>{Math.round(job.percent || 0)}%</strong><span>{[job.speed, job.eta && `Restante: ${job.eta}`].filter(Boolean).join(' · ')}</span></Row></>}{conversionPercent !== null && !imported && <><p className="phase-label">2 de 2 · Processamento no Spresenter</p><div className="progress conversion"><div style={{ width: `${Math.max(2, Math.min(100, conversionPercent))}%` }} /></div><Row className="progress-label"><strong>{Math.round(conversionPercent)}%</strong><span>{destination === 'video' ? 'Gerando o pacote .scp' : destination === 'audio' ? 'Adicionando à Trilha' : 'Adicionando aos Fundos'}</span></Row></>}{error ? <StatusIndicator state="error" label="Não foi possível concluir" detail={error} /> : <StatusIndicator state={imported ? 'ok' : 'warn'} label={imported ? 'Importação concluída' : message || 'Processando…'} detail={imported?.title} />}</Panel>}
+    {(job || message || error || imported) && <Panel label="Andamento">{job?.status === 'downloading' && !job.processing && <><p className="phase-label">1 de 2 · Download</p><div className="progress"><div style={{ width: `${Math.max(2, Math.min(100, job.percent || 0))}%` }} /></div><Row className="progress-label"><strong>{Math.round(job.percent || 0)}%</strong><span>{[job.speed, job.eta && `Restante: ${job.eta}`].filter(Boolean).join(' · ')}</span></Row></>}{conversionPercent !== null && !imported && <><p className="phase-label">2 de 2 · Processamento no Spresenter</p><div className="progress conversion"><div style={{ width: `${Math.max(2, Math.min(100, conversionPercent))}%` }} /></div><Row className="progress-label"><strong>{Math.round(conversionPercent)}%</strong><span>{destination === 'video' ? 'Gerando o pacote .scp' : destination === 'audio' ? 'Adicionando à Trilha' : 'Adicionando aos Fundos'}</span></Row></>}{error ? <StatusIndicator state="error" label="Não foi possível concluir" detail={error} /> : <StatusIndicator state={imported ? 'ok' : 'warn'} label={imported ? 'Importação concluída' : job?.processing || message || 'Processando…'} detail={imported?.title} />}</Panel>}
   </Root>;
 }

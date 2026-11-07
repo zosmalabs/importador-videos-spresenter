@@ -6,7 +6,7 @@
 
 Plugin gratuito da [1Byte Labs](https://github.com/1bytelabs) para analisar links autorizados, baixar vídeos ou extrair o áudio em MP3 e importá-los para **Fundos**, **Vídeos** ou **Trilha** no SPresenter. Também permite pesquisar vídeos gratuitos no Pixabay e no Pexels e adicioná-los diretamente aos Fundos.
 
-> **Versão em desenvolvimento: 0.4.0** · versão pública estável: 0.3.3
+> **Versão 0.4.2**
 
 [Baixar a versão mais recente](https://github.com/1bytelabs/importador-videos-spresenter/releases/latest) · [Tutorial](https://youtu.be/kxIf_o-fvas) · [Projetos da 1Byte Labs](https://github.com/1bytelabs)
 
@@ -69,7 +69,7 @@ O workflow `.github/workflows/gerar-versao.yml` compila automaticamente o plugin
 
 Para gerar uma versão de teste, use **Actions → Gerar versão → Run workflow**. Os arquivos ficarão disponíveis como artifacts da execução.
 
-Ao publicar uma tag no formato `v0.4.0`, a automação gera a release com:
+Ao publicar uma tag no formato `v0.4.2`, a automação gera a release com:
 
 - ZIP do plugin;
 - instalador EXE do Windows;

@@ -1,13 +1,13 @@
 {
   "id": "com.zosmalabs.importador-videos",
   "name": "Importador de Vídeos",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Importa vídeos ou áudios do YouTube e encontra fundos gratuitos no Pixabay e no Pexels.",
   "author": "1Byte Labs",
   "minAppVersion": "0.3.45",
   "sdk": "0.3.45",
   "main": "dist/code.js",
   "ui": "dist/ui/index.html",
-  "permissions": ["assets:read", "assets:write"],
+  "permissions": ["assets:read", "assets:write", "net:connect"],
   "panels": [{ "id": "main", "title": "Importador de Vídeos", "icon": "video" }]
 }

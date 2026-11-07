@@ -148,9 +148,10 @@ function run(file, args, timeout = 0) {
   }));
 }
 
-function startMediaDownload(job, args) {
+function startMediaDownload(job, args, convert) {
   const child = spawn(ytdlp, args, { windowsHide: true });
   let stderr = '';
+  let stdout = '';
   const inspect = chunk => {
     const text = String(chunk);
     stderr = `${stderr}${text}`.slice(-16000);
@@ -163,14 +164,28 @@ function startMediaDownload(job, args) {
       if (eta) job.eta = eta[1];
     }
   };
-  child.stdout.on('data', inspect);
+  child.stdout.on('data', chunk => {
+    stdout = `${stdout}${chunk}`.slice(-16000);
+    inspect(chunk);
+    if (convert && /\[(Merger|VideoRemuxer)\]/.test(stdout)) {
+      job.processing = 'Unindo vídeo e áudio…';
+    }
+  });
   child.stderr.on('data', inspect);
   child.on('error', error => Object.assign(job, { status: 'error', error: error.message || String(error) }));
-  child.on('close', code => {
+  child.on('close', async code => {
     if (job.status === 'error') return;
     if (code !== 0) return Object.assign(job, { status: 'error', error: stderr.trim() || `yt-dlp terminou com código ${code}.` });
+    if (convert) {
+      try {
+        const codecs = stdout.match(/^SPRESENTER_CODECS:(\S+) (\S+)\s*$/m);
+        await convert(codecs?.[1], codecs?.[2]);
+      } catch (error) {
+        return Object.assign(job, { status: 'error', error: error.message });
+      }
+    }
     if (!fs.existsSync(job.file)) return Object.assign(job, { status: 'error', error: `O ${job.mediaType === 'audio' ? 'MP3' : 'MP4'} não foi encontrado após o download.` });
-    Object.assign(job, { status: 'ready', percent: 100, speed: '', eta: '' });
+    Object.assign(job, { status: 'ready', percent: 100, speed: '', eta: '', processing: undefined });
   });
 }
 
@@ -448,7 +463,14 @@ async function handler(req, res) {
       const body = await readBody(req);
       const raw = await run(ytdlp, ['--encoding', 'utf-8', '--dump-single-json', '--skip-download', '--no-playlist', '--no-warnings', '--', body.url], 120000);
       const meta = JSON.parse(raw);
-      return json(res, 200, { title: meta.title, uploader: meta.uploader, thumbnail: meta.thumbnail, duration: meta.duration, webpageUrl: meta.webpage_url });
+      const formats = meta.formats || [];
+      const hasSeparateAudio = formats.some(format => format.vcodec === 'none' && format.acodec && format.acodec !== 'none');
+      const resolutions = [...new Set(formats.filter(format =>
+        Number.isInteger(format.height) && format.height > 720 &&
+        format.vcodec && format.vcodec !== 'none' &&
+        (hasSeparateAudio || (format.acodec && format.acodec !== 'none'))
+      ).map(format => format.height))].sort((a, b) => b - a);
+      return json(res, 200, { title: meta.title, uploader: meta.uploader, thumbnail: meta.thumbnail, duration: meta.duration, webpageUrl: meta.webpage_url, resolutions });
     }
     if (req.method === 'POST' && url.pathname === '/download') {
       const body = await readBody(req);
@@ -465,19 +487,49 @@ async function handler(req, res) {
         startMediaDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', `${bitrate}K`, '-o', template, '--', body.url]);
         return json(res, 202, { jobId: id, status: job.status, percent: job.percent, mediaType: job.mediaType });
       }
+      const height = body.quality;
+      const highResolution = Number.isInteger(height) && height > 720;
       const format = body.quality === 'light'
         ? 'bv*[height<=360][vcodec^=avc1]+ba[ext=m4a]/b[height<=360][vcodec^=avc1][acodec^=mp4a]'
         : 'bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][vcodec^=avc1][acodec^=mp4a]';
       const job = { id, file: output, status: 'downloading', percent: 0, speed: '', eta: '', mediaType: 'video' };
       jobs.set(id, job);
-      startMediaDownload(job, ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpeg, '-f', format, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', template, '--', body.url]);
+      const ffmpegPath = ffmpeg;
+      const args = ['--encoding', 'utf-8', '--no-playlist', '--newline', '--ffmpeg-location', ffmpegPath];
+      if (highResolution) {
+        const sourceTemplate = path.join(downloadsDir(), `${id}.source.%(ext)s`);
+        const source = path.join(downloadsDir(), `${id}.source.mkv`);
+        const exact = `[height=${height}]`;
+        const highFormat = `bv${exact}[vcodec^=avc1]+ba[acodec^=mp4a]/b${exact}[vcodec^=avc1][acodec^=mp4a]/bv${exact}+ba/b${exact}`;
+        const highArgs = [...args, '--no-simulate', '--no-quiet', '--progress',
+          '--print', 'after_move:SPRESENTER_CODECS:%(vcodec)s %(acodec)s',
+          '-f', highFormat, '--merge-output-format', 'mkv', '--remux-video', 'mkv',
+          '-o', sourceTemplate, '--', body.url];
+        startMediaDownload(job, highArgs, async (videoCodec, audioCodec) => {
+          const videoArgs = videoCodec?.startsWith('avc1')
+            ? ['-c:v', 'copy']
+            : ['-c:v', 'libx264', '-preset', 'fast', '-pix_fmt', 'yuv420p'];
+          const audioArgs = ['-c:a', audioCodec?.startsWith('mp4a') ? 'copy' : 'aac'];
+          job.processing = videoArgs[1] === 'copy' ? 'Preparando o MP4…' : 'Convertendo o vídeo para MP4…';
+          try {
+            await run(ffmpegPath, ['-nostdin', '-loglevel', 'error', '-i', source, ...videoArgs, ...audioArgs, '-movflags', '+faststart', output]);
+          } catch (error) {
+            fs.rmSync(output, { force: true });
+            throw error;
+          } finally {
+            fs.rmSync(source, { force: true });
+          }
+        });
+      } else {
+        startMediaDownload(job, [...args, '-f', format, '--merge-output-format', 'mp4', '--recode-video', 'mp4', '-o', template, '--', body.url]);
+      }
       return json(res, 202, { jobId: id, status: job.status, percent: job.percent, mediaType: job.mediaType });
     }
     const jobMatch = url.pathname.match(/^\/jobs\/([a-f0-9]+)$/);
     if (req.method === 'GET' && jobMatch) {
       const job = jobs.get(jobMatch[1]);
       if (!job) return json(res, 404, { error: 'Download não encontrado.' });
-      return json(res, 200, { id: job.id, status: job.status, percent: job.percent, speed: job.speed, eta: job.eta, error: job.error });
+      return json(res, 200, { id: job.id, status: job.status, percent: job.percent, processing: job.processing, speed: job.speed, eta: job.eta, error: job.error });
     }
     const base64Match = url.pathname.match(/^\/base64\/([a-f0-9]+)$/);
     if (req.method === 'GET' && base64Match) {
