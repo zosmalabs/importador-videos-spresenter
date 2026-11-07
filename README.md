@@ -10,6 +10,20 @@ Plugin gratuito da [1Byte Labs](https://github.com/1bytelabs) para analisar link
 
 [Baixar a versão mais recente](https://github.com/1bytelabs/importador-videos-spresenter/releases/latest) · [Tutorial](https://youtu.be/kxIf_o-fvas) · [Projetos da 1Byte Labs](https://github.com/1bytelabs)
 
+## O que mudou na 0.4.2
+
+- A aba YouTube mostra as resoluções acima de 720p detectadas para cada link. Quando disponíveis, é possível importar em 1080p, 1440p e 4K (2160p) para **Fundos** ou **Vídeos**.
+- O auxiliar reaproveita a faixa de vídeo em H.264, VP9 ou AV1 quando possível. Para 4K, prioriza AV1 quando disponível, o que pode reduzir o tamanho do MP4 sem reduzir a resolução ou recodificar a imagem.
+- A tela distingue download, preparação do MP4 ou MP3 e importação no SPresenter. Na categoria **Vídeos**, também mostra o envio e o registro do pacote na biblioteca.
+- A extração para **Trilha** mantém as opções de MP3 em 128, 192 e 320 kbps e mostra o progresso da conversão.
+- Os fundos são transferidos pela conexão local com o auxiliar. Se o SPresenter solicitar a permissão de rede do plugin, conceda-a para que ele possa ler o arquivo local.
+
+### Limites do YouTube e de arquivos grandes
+
+- O menu depende dos formatos que o YouTube disponibiliza ao auxiliar para aquele link. O modo **HD · até 720p** seleciona uma resolução de até 720p.
+- Arquivos de alta resolução podem levar mais tempo para baixar e preparar. Se um MP4 para **Fundos** atingir 2 GiB, o auxiliar interrompe a importação com um aviso. Nesse caso, selecione 1440p ou uma resolução menor.
+- Se o YouTube pedir verificação para o auxiliar, o plugin mostra uma mensagem em português. A análise pode voltar a funcionar ao tentar novamente mais tarde.
+
 ## Principais recursos
 
 - Importação por link do YouTube;
@@ -17,7 +31,7 @@ Plugin gratuito da [1Byte Labs](https://github.com/1bytelabs) para analisar link
 - importação automática de MP3 para **Trilha**;
 - pesquisa integrada no Pixabay e no Pexels;
 - importação direta para **Fundos** ou **Vídeos**;
-- seleção de qualidade em HD, Full HD, 4K ou melhor disponível;
+- seleção de resolução conforme a fonte e os formatos disponíveis;
 - progresso de download e processamento;
 - auxiliar local para Windows e macOS;
 - chaves de API armazenadas somente no computador do usuário;
@@ -26,7 +40,7 @@ Plugin gratuito da [1Byte Labs](https://github.com/1bytelabs) para analisar link
 ## Compatibilidade
 
 - SPresenter 0.3.45 ou mais recente;
-- Windows;
+- Windows x64;
 - macOS Intel;
 - macOS Apple Silicon.
 
@@ -42,6 +56,15 @@ O auxiliar inicia junto com o sistema e permanece disponível na bandeja do Wind
 ## Instalação
 
 Acesse a página de [Releases](https://github.com/1bytelabs/importador-videos-spresenter/releases/latest) e baixe os arquivos correspondentes ao seu sistema.
+
+| Arquivo da 0.4.2 | Onde usar |
+| --- | --- |
+| `Importador-de-Videos-Spresenter-0.4.2.zip` | Instalação do plugin dentro do SPresenter, em qualquer plataforma suportada |
+| `Auxiliar-Importador-Spresenter-Windows-0.4.2.exe` | Windows x64 |
+| `Auxiliar-Importador-Spresenter-macOS-arm64-0.4.2.dmg` | Mac com chip Apple Silicon |
+| `Auxiliar-Importador-Spresenter-macOS-x64-0.4.2.dmg` | Mac com processador Intel |
+
+Para atualizar, encerre o auxiliar pela bandeja do Windows ou pela barra de menus do macOS, instale e abra o novo auxiliar e atualize o plugin com o ZIP da mesma versão. Abra o painel e confira se aparece **Auxiliar conectado**.
 
 ### Windows
 
